@@ -169,37 +169,116 @@ conv_layer_t* make_conv_layer(int in_sx, int in_sy, int in_depth,
 }
 
 void conv_forward(conv_layer_t* l, vol_t** in, vol_t** out, int start, int end) {
+
+ 	int xy_stride = l->stride;
+	int L_OUT_SY = l->out_sy;
+	int L_OUT_SX = l->out_sx;
+ 	int L_out_depth = l->out_depth;
+
   for (int i = start; i <= end; i++) {
+
     vol_t* V = in[i];
-    vol_t* A = out[i];
-        
+    vol_t* A = out[i];     
     int V_sx = V->sx;
     int V_sy = V->sy;
-    int xy_stride = l->stride;
+    int V_depth = V->depth;
+    double* Vw = V->w;
   
-    for(int d = 0; d < l->out_depth; d++) {
+    for(int d = 0; d < L_out_depth; d++) {
+
       vol_t* f = l->filters[d];
       int x = -l->pad;
       int y = -l->pad;
-      for(int ay = 0; ay < l->out_sy; y += xy_stride, ay++) {
+      int f_depth = f->depth;
+   	  double* Fw = f->w;
+   	  uint64_t FSX = f->sx;
+   	  uint64_t FSY = f->sy;
+
+      for(int ay = 0; ay < L_OUT_SY; y += xy_stride, ay++) {
         x = -l->pad;
-        for(int ax=0; ax < l->out_sx; x += xy_stride, ax++) {
+
+        for(int ax=0; ax < L_OUT_SX; x += xy_stride, ax++) {
           double a = 0.0;
-          for(int fy = 0; fy < f->sy; fy++) {
+          __m256d sumZero = _mm256_setzero_pd();
+
+          for(int fy = 0; fy < FSY; fy++) {
             int oy = y + fy;
-            for(int fx = 0; fx < f->sx; fx++) {
-              int ox = x + fx;
-              if(oy >= 0 && oy < V_sy && ox >=0 && ox < V_sx) {
-                for(int fd=0;fd < f->depth; fd++) {
-                  a += f->w[((f->sx * fy)+fx)*f->depth+fd] * V->w[((V_sx * oy)+ox)*V->depth+fd];
-                }
-              }
-            }
+            if (oy >= 0 && oy < V_sy) {
+
+	            for(int fx = 0; fx < FSX; fx++) {
+	              int ox = x + fx;
+
+	              if (ox >=0 && ox < V_sx) {
+
+	              	int val1 = ((FSX * fy)+fx) * f_depth;
+	              	int val2 = ((V_sx * oy)+ox) * V_depth;
+	              	
+	              	if (f_depth == 16) {
+	              		__m256d x1 = _mm256_loadu_pd(Fw + val1);
+	                	__m256d y1 = _mm256_loadu_pd(Vw + val2);
+	                	__m256d mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+
+	                	 x1 = _mm256_loadu_pd(Fw + val1+4);
+	                	 y1 = _mm256_loadu_pd(Vw + val2+4);
+	                	 mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+
+	                	 x1 = _mm256_loadu_pd(Fw + val1+8);
+	                	 y1 = _mm256_loadu_pd(Vw + val2+8);
+	                	 mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+
+	                	 x1 = _mm256_loadu_pd(Fw + val1+12);
+	                	 y1 = _mm256_loadu_pd(Vw + val2+12);
+	                	 mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+	              	}
+	              	else if (f_depth == 20) {
+	              		__m256d x1 = _mm256_loadu_pd(Fw + val1);
+	                	__m256d y1 = _mm256_loadu_pd(Vw + val2);
+	                	__m256d mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+
+	                	 x1 = _mm256_loadu_pd(Fw + val1+4);
+	                	 y1 = _mm256_loadu_pd(Vw + val2+4);
+	                	 mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+
+	                	 x1 = _mm256_loadu_pd(Fw + val1+8);
+	                	 y1 = _mm256_loadu_pd(Vw + val2+8);
+	                	 mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+
+	                	 x1 = _mm256_loadu_pd(Fw + val1+12);
+	                	 y1 = _mm256_loadu_pd(Vw + val2+12);
+	                	 mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+
+	                	 x1 = _mm256_loadu_pd(Fw + val1+16);
+	                	 y1 = _mm256_loadu_pd(Vw + val2+16);
+	                	 mult = _mm256_mul_pd(x1, y1);
+	                	sumZero = _mm256_add_pd(sumZero, mult);
+	              	}
+
+	                else {
+	                	a +=  Fw[val1] * Vw[val2];
+	                	a +=  Fw[val1 + 1] * Vw[val2 + 1];
+	                	a +=  Fw[val1 + 2] * Vw[val2 + 2];
+	                }
+	              }
+	            }
+        	}
           }
-          a += l->biases->w[d];
+
+          double arr[4];
+          _mm256_storeu_pd(arr, sumZero);
+          a += arr[0] + arr[1] + arr[2] + arr[3] + l->biases->w[d];
           set_vol(A, ax, ay, d, a);
         }
+
       }
+      
     }
   }
 }
@@ -214,7 +293,7 @@ void conv_load(conv_layer_t* l, const char* fn) {
   assert(sy == l->sy);
   assert(depth == l->in_depth);
   assert(filters == l->out_depth);
-
+  
   for(int d = 0; d < l->out_depth; d++)
     for (int x = 0; x < sx; x++)
       for (int y = 0; y < sy; y++)
@@ -264,6 +343,7 @@ relu_layer_t* make_relu_layer(int in_sx, int in_sy, int in_depth) {
 }
 
 void relu_forward(relu_layer_t* l, vol_t** in, vol_t** out, int start, int end) {
+#pragma omp parallel for 
   for (int j = start; j <= end; j++) {
     for (int i = 0; i < l->in_sx*l->in_sy*l->in_depth; i++) {
       out[j]->w[i] = (in[j]->w[i] < 0.0) ? 0.0 : in[j]->w[i];
@@ -604,8 +684,9 @@ batch_t* make_batch(network_t* old_net, int size) {
   batch_t* out = (batch_t*)malloc(sizeof(vol_t**)*(LAYERS+1));
   for (int i = 0; i < LAYERS+1; i++) {
     out[i] = (vol_t**)malloc(sizeof(vol_t*)*size);
+    vol_t* idk = old_net->v[i];
     for (int j = 0; j < size; j++) {
-      out[i][j] = make_vol(old_net->v[i]->sx, old_net->v[i]->sy, old_net->v[i]->depth, 0.0);
+      out[i][j] = make_vol(idk->sx, idk->sy, idk->depth, 0.0);
     }
   }
 
@@ -633,7 +714,7 @@ void free_batch(batch_t* v, int size) {
  */
 
 void net_forward(network_t* net, batch_t* v, int start, int end) {
-  conv_forward(net->l0, v[0], v[1], start, end);
+	conv_forward(net->l0, v[0], v[1], start, end);
   relu_forward(net->l1, v[1], v[2], start, end);
   pool_forward(net->l2, v[2], v[3], start, end);
   conv_forward(net->l3, v[3], v[4], start, end);
@@ -657,15 +738,18 @@ void net_forward(network_t* net, batch_t* v, int start, int end) {
 
 #define CAT_LABEL 3
 void net_classify_cats(network_t* net, vol_t** input, double* output, int n) {
-  batch_t* batch = make_batch(net, 1);
 
-  for (int i = 0; i < n; i++) {
-    copy_vol(batch[0][0], input[i]);
-    net_forward(net, batch, 0, 0);
-    output[i] = batch[11][0]->w[CAT_LABEL]; 
-  }
-
-  free_batch(batch, 1);
+	#pragma omp parallel
+	{
+  		batch_t* batch = make_batch(net, 1);
+  		#pragma omp for
+  		for (int i = 0; i < n; i++) {
+    		copy_vol(batch[0][0], input[i]);
+    		net_forward(net, batch, 0, 0);
+    		output[i] = batch[11][0]->w[CAT_LABEL]; 
+  		}
+  		free_batch(batch, 1);
+	}
 }
 
 // IGNORE EVERYTHING BELOW THIS POINT -----------------------------------------
